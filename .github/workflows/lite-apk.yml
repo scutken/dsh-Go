@@ -1,0 +1,82 @@
+name: Build DSH Lite APK
+
+# 只构建 lite/ 这一个精简 App；不触碰原 app/ 的 CI。
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'lite/**'
+      - 'packages/dsh_remote/**'
+      - 'packages/dsh_client/**'
+      - '.github/workflows/lite-apk.yml'
+
+permissions:
+  contents: write
+
+env:
+  FLUTTER_VERSION: 3.47.7
+  TZ: Asia/Shanghai
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: Pub get
+        working-directory: lite
+        run: flutter pub get
+
+      - name: Analyze
+        working-directory: lite
+        run: flutter analyze
+
+      - name: Build release APK (arm64 only)
+        working-directory: lite
+        run: |
+          # 只要 arm64：联发科/骁龙都是 arm64，包体最小。
+          flutter build apk --release --target-platform android-arm64
+
+      - name: Rename artifact
+        run: |
+          mkdir -p out
+          cp lite/build/app/outputs/flutter-apk/app-release.apk \
+             "out/dsh-lite-${GITHUB_SHA::7}-arm64.apk"
+          ls -lh out/
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dsh-lite-apk
+          path: out/*.apk
+          retention-days: 30
+
+      # Release 的资源链接不需要登录即可下载，方便手机直接装。
+      - name: Publish rolling release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG=lite-latest
+          gh release delete "$TAG" --yes --cleanup-tag 2>/dev/null || true
+          gh release create "$TAG" out/*.apk \
+            --title "DSH Lite (精简版)" \
+            --notes "只保留连接远程 DSH：已移除本地 Linux 运行时、无障碍、ADB。
+
+          构建来源：${{ github.sha }}
+          时间：$(TZ=Asia/Shanghai date '+%Y-%m-%d %H:%M')
+
+          安装：下载 arm64 APK 直接安装。小米机型如被拦截，请用 adb install -r。" \
+            --prerelease
